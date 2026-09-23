@@ -68,9 +68,10 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(b"Meera LinkedIn draft webhook is running.")
 
     def do_POST(self):
-        if WEBHOOK_SECRET:
-            got = self.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-            if got != WEBHOOK_SECRET:
+        expected_secret = WEBHOOK_SECRET.strip()
+        if expected_secret:
+            got = self.headers.get("X-Telegram-Bot-Api-Secret-Token", "").strip()
+            if got != expected_secret:
                 self.send_response(401)
                 self.end_headers()
                 return
