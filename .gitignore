@@ -1,3 +1,5 @@
 .env
 state.json
 drafts/
+__pycache__/
+*.pyc

@@ -1,8 +1,14 @@
 """
-Meera / Skinstinct LinkedIn draft automation.
+Meera / Skinstinct LinkedIn draft automation -- LOCAL DEV / TESTING VERSION.
+
+This polls Telegram in a loop, which only works while this script is kept
+running on your own machine. The production version deployed to Vercel is
+api/webhook.py -- it does the same drafting (via the shared draft_logic.py
+module) but gets notes pushed to it instead of polling, since Vercel can't
+run a permanent background process.
 
 Flow (Trigger -> Input -> Context -> Processing -> AI -> Output):
-  Trigger    : new message arrives in Meera's Telegram bot chat
+  Trigger    : new message arrives in Meera's Telegram channel
   Input      : the raw note text, fetched via Telegram's getUpdates
   Context    : meera_voice_skill.md (her style rules)
   Processing : a cheap Gemini call decides if the note is substantive
@@ -29,18 +35,22 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from draft_logic import draft_linkedin_post, is_note_substantive, send_telegram_message
+
 BASE_DIR = Path(__file__).resolve().parent
 SKILL_FILE = BASE_DIR / "meera_voice_skill.md"
 DRAFTS_DIR = BASE_DIR / "drafts"
 STATE_FILE = BASE_DIR / "state.json"
 POLL_SECONDS = 30
-MIN_NOTE_LENGTH = 25  # notes shorter than this are almost never substantive
 
 load_dotenv(BASE_DIR / ".env")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+search_tool = types.Tool(google_search=types.GoogleSearch())
 
 
 def load_state() -> dict:
@@ -63,16 +73,6 @@ def get_telegram_updates(offset: int) -> list:
     return resp.json().get("result", [])
 
 
-def send_telegram_message(chat_id: int, text: str) -> None:
-    # Telegram messages are capped at 4096 chars; split long drafts.
-    for i in range(0, len(text), 4000):
-        requests.post(
-            f"{TELEGRAM_API}/sendMessage",
-            data={"chat_id": chat_id, "text": text[i:i + 4000]},
-            timeout=20,
-        )
-
-
 def slugify(text: str, max_len: int = 40) -> str:
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     keep = "".join(c if c.isalnum() else "-" for c in text.lower())
@@ -81,93 +81,28 @@ def slugify(text: str, max_len: int = 40) -> str:
     return keep.strip("-")[:max_len] or "note"
 
 
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-search_tool = types.Tool(google_search=types.GoogleSearch())
-
-
-def is_note_substantive(note: str) -> tuple[bool, str]:
-    """Cheap screening pass: does this fragment have enough in it to
-    become a post, or is it noise? Returns (yes/no, one-line reason)."""
-    if len(note.strip()) < MIN_NOTE_LENGTH:
-        return False, "too short to contain a real claim or observation"
-
-    prompt = f"""You are screening raw notes for whether they are worth
-turning into a LinkedIn post for a skincare-brand founder whose posts are
-technical, specific, and always contain a concrete fact, number, or
-first-hand observation (not vague wellness talk).
-
-Note:
----
-{note}
----
-
-Reply with exactly two lines:
-DECISION: YES or NO
-REASON: one short sentence why
-"""
-    response = gemini_client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-    )
-    text = response.text or ""
-    decision = "YES" in text.splitlines()[0].upper() if text else False
-    reason_line = next((l for l in text.splitlines() if l.upper().startswith("REASON")), "")
-    reason = reason_line.split(":", 1)[-1].strip() if reason_line else "no reason returned"
-    return decision, reason
-
-
-def draft_linkedin_post(note: str, skill_text: str) -> str:
-    prompt = f"""{skill_text}
-
----
-
-Using ONLY the voice rules above, draft ONE LinkedIn post based on the raw
-note below from Meera. Before writing, use Google Search to find one
-current, real, specific news item, industry data point, or regulatory
-update relevant to the note's topic (skincare actives, formulation
-science, Indian D2C/consumer trends, or cosmetic regulation) and weave it
-in naturally, the way she references real studies and sources in her
-existing posts. Do not fabricate a source — if you can't find a genuinely
-relevant one, skip the news angle rather than inventing one.
-
-Raw note from Meera:
----
-{note}
----
-
-Output ONLY the finished LinkedIn post text (no preamble, no explanation,
-no markdown formatting, no headers). End it signed "Meera" on its own line,
-matching her sign-off style.
-"""
-    response = gemini_client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig(tools=[search_tool]),
-    )
-    return (response.text or "").strip()
-
-
 def process_note(chat_id: int, note: str, skill_text: str) -> None:
     print(f"[{datetime.now():%H:%M:%S}] New note: {note[:60]!r}")
 
-    substantive, reason = is_note_substantive(note)
+    substantive, reason = is_note_substantive(gemini_client, note)
     if not substantive:
         print(f"  -> skipped ({reason})")
         send_telegram_message(
+            TELEGRAM_BOT_TOKEN,
             chat_id,
             f"Skipped this note for a draft: {reason}\n\nNote was: \"{note}\"",
         )
         return
 
     print("  -> drafting...")
-    draft = draft_linkedin_post(note, skill_text)
+    draft = draft_linkedin_post(gemini_client, search_tool, note, skill_text)
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     filename = DRAFTS_DIR / f"{timestamp}-{slugify(note)}.txt"
     filename.write_text(draft, encoding="utf-8")
     print(f"  -> saved {filename.name}")
 
-    send_telegram_message(chat_id, f"Draft ready:\n\n{draft}")
+    send_telegram_message(TELEGRAM_BOT_TOKEN, chat_id, f"Draft ready:\n\n{draft}")
 
 
 def main() -> None:
@@ -202,7 +137,7 @@ def main() -> None:
                 except Exception as exc:  # noqa: BLE001
                     print(f"  -> error processing note: {exc}")
                     send_telegram_message(
-                        chat_id, f"Something went wrong drafting this note: {exc}"
+                        TELEGRAM_BOT_TOKEN, chat_id, f"Something went wrong drafting this note: {exc}"
                     )
                 save_state(state)
         except requests.RequestException as exc:
