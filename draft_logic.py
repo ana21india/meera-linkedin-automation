@@ -47,7 +47,7 @@ DECISION: YES or NO
 REASON: one short sentence why
 """
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         contents=prompt,
     )
     text = response.text or ""
@@ -82,7 +82,7 @@ no markdown formatting, no headers). End it signed "Meera" on its own line,
 matching her sign-off style.
 """
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         contents=prompt,
         config=types.GenerateContentConfig(tools=[search_tool]),
     )
