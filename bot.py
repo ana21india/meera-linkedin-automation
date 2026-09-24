@@ -35,7 +35,12 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from draft_logic import draft_linkedin_post, is_note_substantive, send_telegram_message
+from draft_logic import (
+    draft_linkedin_post,
+    format_citations_message,
+    is_note_substantive,
+    send_telegram_message,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 SKILL_FILE = BASE_DIR / "meera_voice_skill.md"
@@ -95,14 +100,16 @@ def process_note(chat_id: int, note: str, skill_text: str) -> None:
         return
 
     print("  -> drafting...")
-    draft = draft_linkedin_post(gemini_client, search_tool, note, skill_text)
+    result = draft_linkedin_post(gemini_client, search_tool, note, skill_text)
+    citations_text = format_citations_message(result["citations"])
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     filename = DRAFTS_DIR / f"{timestamp}-{slugify(note)}.txt"
-    filename.write_text(draft, encoding="utf-8")
+    filename.write_text(f"{result['post']}\n\n{citations_text}", encoding="utf-8")
     print(f"  -> saved {filename.name}")
 
-    send_telegram_message(TELEGRAM_BOT_TOKEN, chat_id, f"Draft ready:\n\n{draft}")
+    send_telegram_message(TELEGRAM_BOT_TOKEN, chat_id, f"Draft ready:\n\n{result['post']}")
+    send_telegram_message(TELEGRAM_BOT_TOKEN, chat_id, citations_text)
 
 
 def main() -> None:

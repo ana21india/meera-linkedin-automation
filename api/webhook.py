@@ -28,6 +28,7 @@ from google.genai import types
 
 from draft_logic import (
     draft_linkedin_post,
+    format_citations_message,
     is_note_substantive,
     load_skill_text,
     send_telegram_message,
@@ -53,8 +54,11 @@ def _handle_note(chat_id: int, note: str) -> None:
             )
             return
 
-        draft = draft_linkedin_post(_gemini_client, _search_tool, note, _skill_text)
-        send_telegram_message(TELEGRAM_BOT_TOKEN, chat_id, f"Draft ready:\n\n{draft}")
+        result = draft_linkedin_post(_gemini_client, _search_tool, note, _skill_text)
+        send_telegram_message(TELEGRAM_BOT_TOKEN, chat_id, f"Draft ready:\n\n{result['post']}")
+        send_telegram_message(
+            TELEGRAM_BOT_TOKEN, chat_id, format_citations_message(result["citations"])
+        )
     except Exception as exc:  # noqa: BLE001
         send_telegram_message(
             TELEGRAM_BOT_TOKEN, chat_id, f"Something went wrong drafting this note: {exc}"

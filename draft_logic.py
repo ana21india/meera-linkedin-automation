@@ -37,6 +37,17 @@ turning into a LinkedIn post for a skincare-brand founder whose posts are
 technical, specific, and always contain a concrete fact, number, or
 first-hand observation (not vague wellness talk).
 
+Reject (answer NO) anything that is operational noise rather than content,
+even if it's a full sentence. This includes, for example:
+- Greetings or filler with no claim in them ("Hey", "There", "Love you")
+- Logistics / admin: vendor names, phone numbers, meeting times/places
+  ("vendor number is XX and meet him on XX for XX")
+- To-do reminders, internal scheduling, or anything meant for a person,
+  not an audience
+
+Only answer YES if the note contains an actual observation, claim, number,
+or story that a reader outside the company would learn something from.
+
 Note:
 ---
 {note}
@@ -58,19 +69,66 @@ REASON: one short sentence why
     return decision, reason
 
 
-def draft_linkedin_post(client, search_tool, note: str, skill_text: str) -> str:
+def _extract_citations(response) -> list[dict]:
+    """Pull the real web sources Gemini's search grounding actually used,
+    so we never present a source that wasn't genuinely retrieved."""
+    citations: list[dict] = []
+    try:
+        candidates = response.candidates or []
+        for candidate in candidates:
+            metadata = getattr(candidate, "grounding_metadata", None)
+            if not metadata:
+                continue
+            for chunk in getattr(metadata, "grounding_chunks", None) or []:
+                web = getattr(chunk, "web", None)
+                if web and getattr(web, "uri", None):
+                    citations.append({
+                        "title": getattr(web, "title", None) or web.uri,
+                        "uri": web.uri,
+                    })
+    except Exception:  # noqa: BLE001
+        pass
+
+    # de-dupe while preserving order
+    seen = set()
+    unique = []
+    for c in citations:
+        if c["uri"] not in seen:
+            seen.add(c["uri"])
+            unique.append(c)
+    return unique
+
+
+def draft_linkedin_post(client, search_tool, note: str, skill_text: str) -> dict:
+    """Returns {"post": str, "citations": [{"title", "uri"}, ...]}."""
     prompt = f"""{skill_text}
 
 ---
 
 Using ONLY the voice rules above, draft ONE LinkedIn post based on the raw
-note below from Meera. Before writing, use Google Search to find one
-current, real, specific news item, industry data point, or regulatory
-update relevant to the note's topic (skincare actives, formulation
-science, Indian D2C/consumer trends, or cosmetic regulation) and weave it
-in naturally, the way she references real studies and sources in her
-existing posts. Do not fabricate a source — if you can't find a genuinely
-relevant one, skip the news angle rather than inventing one.
+note below from Meera.
+
+Before writing, use Google Search to look for current news, data, or
+industry/regulatory updates relevant to the note's topic (skincare
+actives, formulation science, Indian D2C/consumer trends, or cosmetic
+regulation), and weave in ONE such item naturally if you find a genuinely
+relevant one, the way she references real studies and sources in her
+existing posts.
+
+Hard rules against hallucination:
+- Never state a statistic, study finding, regulation, or news event unless
+  it came from an actual search result you retrieved just now.
+- Never invent a source, study name, publication, or number. If you are
+  not certain a fact is real and retrieved, leave it out entirely.
+- If search turns up nothing genuinely relevant to this note's topic,
+  write the post from the note alone with no external claim added. A
+  post with no news angle is far better than one with a fabricated one.
+- Do not invent specific numbers or details that aren't in the note
+  either. If the note says "pH dropped by about 0.4 units" without giving
+  the exact before/after values, write it exactly that way -- do not
+  invent a starting or ending pH value to make it sound more precise.
+  Only use numbers that are either directly from the note or directly
+  from a real search result.
 
 Raw note from Meera:
 ---
@@ -86,4 +144,16 @@ matching her sign-off style.
         contents=prompt,
         config=types.GenerateContentConfig(tools=[search_tool]),
     )
-    return (response.text or "").strip()
+    return {
+        "post": (response.text or "").strip(),
+        "citations": _extract_citations(response),
+    }
+
+
+def format_citations_message(citations: list[dict]) -> str:
+    if not citations:
+        return "Sources: none — this draft is based only on your note, no external data was found or used."
+    lines = ["Sources used for this draft:"]
+    for c in citations:
+        lines.append(f"- {c['title']}: {c['uri']}")
+    return "\n".join(lines)
