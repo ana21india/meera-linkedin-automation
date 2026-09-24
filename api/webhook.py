@@ -26,11 +26,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from google import genai
 
 from draft_logic import (
+    download_telegram_file,
     draft_linkedin_post,
     format_citations_message,
     is_note_substantive,
     load_skill_text,
     send_telegram_message,
+    transcribe_voice_note,
 )
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -95,7 +97,28 @@ class handler(BaseHTTPRequestHandler):
             return
 
         message = update.get("message") or update.get("channel_post")
-        if not message or "text" not in message:
+        if not message:
+            return
+        chat_id = message["chat"]["id"]
+
+        if "text" in message:
+            _handle_note(chat_id, message["text"])
             return
 
-        _handle_note(message["chat"]["id"], message["text"])
+        voice = message.get("voice") or message.get("audio")
+        if voice:
+            try:
+                audio_bytes = download_telegram_file(TELEGRAM_BOT_TOKEN, voice["file_id"])
+                mime_type = voice.get("mime_type", "audio/ogg")
+                note = transcribe_voice_note(_gemini_client, audio_bytes, mime_type)
+                if not note:
+                    send_telegram_message(
+                        TELEGRAM_BOT_TOKEN, chat_id, "Couldn't transcribe that voice note (empty result)."
+                    )
+                    return
+                send_telegram_message(TELEGRAM_BOT_TOKEN, chat_id, f"Transcribed: \"{note}\"")
+                _handle_note(chat_id, note)
+            except Exception as exc:  # noqa: BLE001
+                send_telegram_message(
+                    TELEGRAM_BOT_TOKEN, chat_id, f"Something went wrong transcribing that voice note: {exc}"
+                )

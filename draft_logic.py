@@ -10,6 +10,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 import requests
+from google.genai import types
 
 MIN_NOTE_LENGTH = 25
 SKILL_FILE = Path(__file__).resolve().parent / "meera_voice_skill.md"
@@ -39,6 +40,35 @@ RUBRIC = [
 
 def load_skill_text() -> str:
     return SKILL_FILE.read_text(encoding="utf-8")
+
+
+def download_telegram_file(token: str, file_id: str) -> bytes:
+    """Voice notes arrive as a file_id, not raw bytes -- this resolves it
+    to an actual downloadable file via Telegram's two-step file API."""
+    api = f"https://api.telegram.org/bot{token}"
+    file_info = requests.get(f"{api}/getFile", params={"file_id": file_id}, timeout=20)
+    file_info.raise_for_status()
+    file_path = file_info.json()["result"]["file_path"]
+
+    file_resp = requests.get(
+        f"https://api.telegram.org/file/bot{token}/{file_path}", timeout=30
+    )
+    file_resp.raise_for_status()
+    return file_resp.content
+
+
+def transcribe_voice_note(client, audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
+    """Telegram voice notes are OGG/Opus by default; Gemini accepts audio
+    directly, so we skip any separate speech-to-text service."""
+    response = client.models.generate_content(
+        model="gemini-3.6-flash",
+        contents=[
+            types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+            "Transcribe this voice note exactly, word for word, in English. "
+            "Output ONLY the transcription, nothing else -- no preamble, no notes.",
+        ],
+    )
+    return (response.text or "").strip()
 
 
 def send_telegram_message(token: str, chat_id: int, text: str) -> None:

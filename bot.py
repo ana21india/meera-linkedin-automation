@@ -35,10 +35,12 @@ from dotenv import load_dotenv
 from google import genai
 
 from draft_logic import (
+    download_telegram_file,
     draft_linkedin_post,
     format_citations_message,
     is_note_substantive,
     send_telegram_message,
+    transcribe_voice_note,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -135,16 +137,31 @@ def main() -> None:
             for update in updates:
                 state["last_update_id"] = update["update_id"]
                 message = update.get("message") or update.get("channel_post")
-                if not message or "text" not in message:
+                if not message:
                     continue
                 chat_id = message["chat"]["id"]
-                note = message["text"]
+
                 try:
-                    process_note(chat_id, note, skill_text)
+                    if "text" in message:
+                        process_note(chat_id, message["text"], skill_text)
+                    else:
+                        voice = message.get("voice") or message.get("audio")
+                        if voice:
+                            print(f"[{datetime.now():%H:%M:%S}] Transcribing voice note...")
+                            audio_bytes = download_telegram_file(TELEGRAM_BOT_TOKEN, voice["file_id"])
+                            mime_type = voice.get("mime_type", "audio/ogg")
+                            note = transcribe_voice_note(gemini_client, audio_bytes, mime_type)
+                            if note:
+                                send_telegram_message(TELEGRAM_BOT_TOKEN, chat_id, f"Transcribed: \"{note}\"")
+                                process_note(chat_id, note, skill_text)
+                            else:
+                                send_telegram_message(
+                                    TELEGRAM_BOT_TOKEN, chat_id, "Couldn't transcribe that voice note (empty result)."
+                                )
                 except Exception as exc:  # noqa: BLE001
                     print(f"  -> error processing note: {exc}")
                     send_telegram_message(
-                        TELEGRAM_BOT_TOKEN, chat_id, f"Something went wrong drafting this note: {exc}"
+                        TELEGRAM_BOT_TOKEN, chat_id, f"Something went wrong processing that note: {exc}"
                     )
                 save_state(state)
         except requests.RequestException as exc:
