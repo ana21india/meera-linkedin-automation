@@ -106,7 +106,9 @@ def process_note(chat_id: int, note: str, skill_text: str) -> None:
     filename.write_text(f"{result['post']}\n\n{citations_text}", encoding="utf-8")
     print(f"  -> saved {filename.name}")
 
-    send_telegram_message(TELEGRAM_BOT_TOKEN, chat_id, f"Draft ready:\n\n{result['post']}")
+    send_telegram_message(
+        TELEGRAM_BOT_TOKEN, chat_id, f"Draft ready (score {score}/10):\n\n{result['post']}"
+    )
     send_telegram_message(TELEGRAM_BOT_TOKEN, chat_id, citations_text)
 
 

@@ -53,7 +53,9 @@ def _handle_note(chat_id: int, note: str) -> None:
             return
 
         result = draft_linkedin_post(_gemini_client, note, _skill_text)
-        send_telegram_message(TELEGRAM_BOT_TOKEN, chat_id, f"Draft ready:\n\n{result['post']}")
+        send_telegram_message(
+            TELEGRAM_BOT_TOKEN, chat_id, f"Draft ready (score {score}/10):\n\n{result['post']}"
+        )
         send_telegram_message(
             TELEGRAM_BOT_TOKEN, chat_id, format_citations_message(result["citations"])
         )
