@@ -33,7 +33,6 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 from google import genai
-from google.genai import types
 
 from draft_logic import (
     draft_linkedin_post,
@@ -55,7 +54,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-search_tool = types.Tool(google_search=types.GoogleSearch())
 
 
 def load_state() -> dict:
@@ -89,18 +87,18 @@ def slugify(text: str, max_len: int = 40) -> str:
 def process_note(chat_id: int, note: str, skill_text: str) -> None:
     print(f"[{datetime.now():%H:%M:%S}] New note: {note[:60]!r}")
 
-    substantive, reason = is_note_substantive(gemini_client, note)
+    substantive, reason, score = is_note_substantive(gemini_client, note)
     if not substantive:
-        print(f"  -> skipped ({reason})")
+        print(f"  -> skipped (score {score}/10: {reason})")
         send_telegram_message(
             TELEGRAM_BOT_TOKEN,
             chat_id,
-            f"Skipped this note for a draft: {reason}\n\nNote was: \"{note}\"",
+            f"Skipped this note for a draft (score {score}/10): {reason}\n\nNote was: \"{note}\"",
         )
         return
 
-    print("  -> drafting...")
-    result = draft_linkedin_post(gemini_client, search_tool, note, skill_text)
+    print(f"  -> drafting (score {score}/10)...")
+    result = draft_linkedin_post(gemini_client, note, skill_text)
     citations_text = format_citations_message(result["citations"])
 
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")

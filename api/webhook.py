@@ -24,7 +24,6 @@ from http.server import BaseHTTPRequestHandler
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from google import genai
-from google.genai import types
 
 from draft_logic import (
     draft_linkedin_post,
@@ -39,22 +38,21 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
 
 _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-_search_tool = types.Tool(google_search=types.GoogleSearch())
 _skill_text = load_skill_text()
 
 
 def _handle_note(chat_id: int, note: str) -> None:
     try:
-        substantive, reason = is_note_substantive(_gemini_client, note)
+        substantive, reason, score = is_note_substantive(_gemini_client, note)
         if not substantive:
             send_telegram_message(
                 TELEGRAM_BOT_TOKEN,
                 chat_id,
-                f"Skipped this note for a draft: {reason}\n\nNote was: \"{note}\"",
+                f"Skipped this note for a draft (score {score}/10): {reason}\n\nNote was: \"{note}\"",
             )
             return
 
-        result = draft_linkedin_post(_gemini_client, _search_tool, note, _skill_text)
+        result = draft_linkedin_post(_gemini_client, note, _skill_text)
         send_telegram_message(TELEGRAM_BOT_TOKEN, chat_id, f"Draft ready:\n\n{result['post']}")
         send_telegram_message(
             TELEGRAM_BOT_TOKEN, chat_id, format_citations_message(result["citations"])
